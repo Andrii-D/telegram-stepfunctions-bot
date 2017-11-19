@@ -1,0 +1,136 @@
+service: telegram-stepfunction-bot
+
+frameworkVersion: ">=1.2.0 <2.0.0"
+
+provider:
+  name: aws
+  runtime: python2.7
+  stage: dev
+  region: us-east-1
+  memorySize: 128
+  environment:
+    TELEGRAM_TOKEN: ${env:TELEGRAM_TOKEN}
+    MESSAGES_TABLE: ${self:service}-${opt:stage, self:provider.stage}-stepfunction-bot-messages
+    USERS_TABLE: ${self:service}-${opt:stage, self:provider.stage}-stepfunction-bot-users
+  iamRoleStatements:
+    - Effect: Allow
+      Action:
+        - dynamodb:Query
+        - dynamodb:Scan
+        - dynamodb:GetItem
+        - dynamodb:PutItem
+        - dynamodb:UpdateItem
+        - dynamodb:DeleteItem
+      Resource: "arn:aws:dynamodb:${opt:region, self:provider.region}:*:table/*"
+
+functions:
+  receive:
+    description: Receive message
+    handler: handler.receive
+
+  respond:
+    description: Respond to user
+    handler: handler.respond
+
+  log:
+      description: Save all messages to DynamoDB
+      handler: handler.log
+
+  authorize:
+        description: Authorize user
+        handler: handler.authorize
+
+stepFunctions:
+  stateMachines:
+    BotStateMachine:
+      events:
+        - http:
+            path: telegram-${self:provider.stage}-bot
+            method: post
+            cors: true
+      definition:
+        Comment: "Telegram bot State Machine"
+        StartAt: parallel
+        States:
+          parallel:
+            Type: Parallel
+            Next: final_state
+            ResultPath: $.results.parallel
+            Branches:
+              - StartAt: log
+                States:
+                  log:
+                    Type: Task
+                    Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-log"
+                    End: true
+              - StartAt: receive
+                States:
+                  receive:
+                    Type: Task
+                    Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-receive"
+                    Next: AuthOrNot
+                    ResultPath: $.results.receive
+                  AuthOrNot:
+                    Type: Choice
+                    Choices:
+                    - Variable: "$.results.receive.authorize"
+                      NumericEquals: 1
+                      Next: authorize
+                    Default: respond
+                  respond:
+                    Type: Task
+                    Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-respond"
+                    End: true
+                    ResultPath: $.results.respond
+                  authorize:
+                    Type: Task
+                    Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-authorize"
+                    Next: respond
+                    ResultPath: $.results.authorize
+          final_state:
+            Type: Pass
+            End: true
+
+
+resources:
+  Resources:
+    MessagesDynamoDbTable:
+      Type: 'AWS::DynamoDB::Table'
+      DeletionPolicy: Retain
+      Properties:
+        AttributeDefinitions:
+          -
+            AttributeName: key
+            AttributeType: S
+        KeySchema:
+          -
+            AttributeName: key
+            KeyType: HASH
+        ProvisionedThroughput:
+          ReadCapacityUnits: 1
+          WriteCapacityUnits: 1
+        TableName: ${self:provider.environment.MESSAGES_TABLE}
+    UsersDynamoDbTable:
+      Type: 'AWS::DynamoDB::Table'
+      DeletionPolicy: Retain
+      Properties:
+        AttributeDefinitions:
+          -
+            AttributeName: username
+            AttributeType: S
+        KeySchema:
+          -
+            AttributeName: username
+            KeyType: HASH
+        ProvisionedThroughput:
+          ReadCapacityUnits: 1
+          WriteCapacityUnits: 1
+        TableName: ${self:provider.environment.USERS_TABLE}
+
+package:
+  exclude:
+    - ./node_modules/*
+
+plugins:
+  - serverless-step-functions
+  - serverless-pseudo-parameters
