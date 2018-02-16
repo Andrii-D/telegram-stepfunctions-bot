@@ -22,3 +22,6 @@ State machine will invoke two Lambda function in parallel with same payload:
 `receive` will pass the result to the next state: `AuthOrNot` - which is not a Lambda function but just a decider. It will check the result of previous function and either invoke `authorize` or `respond` Lambda function.
 
 `authorize` is aimed to send a callback to your website to authorize the user if needed. The `respond` function will just send a response to the chatbot.
+
+## Too complex?
+Here is an example of super simple Telegram bot with only one Lamdba: https://github.com/Andrii-D/serverless-telegram-bot
